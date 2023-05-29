@@ -6,9 +6,10 @@ extracted packages from the Nucleus1000 DVL are handled.
 """
 
 import rospy
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Bool
 from sensor_msgs.msg import Imu
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistWithCovarianceStamped
+from nucleus1000_driver.msg import NortekDVL
 
 import socket
 import time
@@ -39,22 +40,34 @@ class NORTEK_DEFINES:
 class NucleusRosDriver():
 
     def __init__(self):
+        # Get params for topics
+        imu_topic = rospy.get_param("~topics/publishers/imu")
+        dvl_topic = rospy.get_param("~topics/publishers/dvl")
+        ahrs_topic = rospy.get_param("~topics/publishers/ahrs")
+        altimeter_topic = rospy.get_param("~topics/publishers/altimeter")
 
-        self.imu_data_pub = rospy.Publisher("/dvl/imu_data", Imu, queue_size=10)
+        # Enable topic
+        enable_topic = rospy.get_param("~topics/subscribers/enable")
+
+        self.imu_data_pub = rospy.Publisher(imu_topic, Imu, queue_size=10)
         self.imu_pub_seq = 0
 
-        self.dvl_twist_pub = rospy.Publisher("/dvl/dvl_data", TwistWithCovarianceStamped, queue_size=10)
+        self.dvl_twist_pub = rospy.Publisher(dvl_topic, NortekDVL, queue_size=10)
         self.dvl_pub_seq = 0
 
-        self.ahrs_pose_pub = rospy.Publisher("/dvl/ahrs_pose", PoseWithCovarianceStamped, queue_size=10)
+        self.ahrs_pose_pub = rospy.Publisher(ahrs_topic, PoseWithCovarianceStamped, queue_size=10)
         self.ahrs_pub_seq = 0
 
-        self.altitude_pub = rospy.Publisher("/dvl/altitude", Float32, queue_size=10)
+        self.altitude_pub = rospy.Publisher(altimeter_topic, Float32, queue_size=10)
+
+        # Enable subscriber
+        self.enable_sub = rospy.Subscriber(enable_topic, Bool, self.enablecallback)
+        self.enable = False
 
         self.sensor_frame_id = "uns_link"
         self.map_frame_id = "odom"
 
-        self.hostname = rospy.get_param("/nucleus1000_driver/dvl_ip")
+        self.hostname = rospy.get_param("~ip")
         if self.hostname == "":
             self.hostname = "169.254.15.123"
         self.port = 9000
@@ -77,17 +90,27 @@ class NucleusRosDriver():
 
         self.nucleus_driver.thread.start()
         #self.nucleus_driver.logging.start()
-        self.nucleus_driver.commands.start() # Send START to Nucleus1000
 
+        # Commented this to enable dvl via subscribed topic
+        # self.nucleus_driver.commands.start() # Send START to Nucleus1000
+
+    def enablecallback(self, msg):
+        if msg.data == True:
+            self.enable = True
+            self.nucleus_driver.commands.start() # Send START to Nucleus1000
+        else:
+            self.enable = False
+            self.nucleus_driver.commands.stop() # Send STOP to Nucleus1000
 
     def spin(self):
         while not rospy.is_shutdown():
-            try:
-                packet = self.nucleus_driver.parser.read_packet()
-                self.parse_packet_ros(packet)
-            except Exception as err:
-                pass
-            time.sleep(0.01)
+            if self.enable:
+                try:
+                    packet = self.nucleus_driver.parser.read_packet()
+                    self.parse_packet_ros(packet)
+                except Exception as err:
+                    pass
+                time.sleep(0.01)
             
         rospy.loginfo("Stopping Nucleus1000 DVL...")
         #self.nucleus_driver.logging.stop()
@@ -139,6 +162,8 @@ class NucleusRosDriver():
             # but is left like this since we explicitly retrieve the data
 
             #status = package['status']
+
+            dvl_msg = NortekDVL()
                     
             v_b   = [packet['velocity_beam_0'], packet['velocity_beam_1'], packet['velocity_beam_2']]
             d_b   = [packet['distance_beam_0'], packet['distance_beam_1'], packet['distance_beam_2']]
@@ -172,27 +197,31 @@ class NucleusRosDriver():
             if invalid_data != "":
                 # Note that this is very dirty, but lets us be safe in case the AUV sits on the pool floor!
                 rospy.logwarn("Invalid { %s} received. Setting velocities to zero!" % invalid_data)
-                vel_x = 0
-                vel_y = 0
-                vel_z = 0
+                # vel_x = 0
+                # vel_y = 0
+                # vel_z = 0
 
-                var_x = 0.001
-                var_y = 0.001
-                var_z = 0.001
+                # var_x = 0.001
+                # var_y = 0.001
+                # var_z = 0.001
+                dvl_msg.valid = False
+            else:
+                dvl_msg.valid = True
             
             #pressure = package['pressure']
 
-            dvl_msg = TwistWithCovarianceStamped()
+            # dvl_msg = TwistWithCovarianceStamped()
+            
 
-            dvl_msg.header.seq = self.dvl_pub_seq
-            dvl_msg.header.stamp = rospy.Time.now()
-            dvl_msg.header.frame_id = self.sensor_frame_id
+            dvl_msg.twist_stamped.header.seq = self.dvl_pub_seq
+            dvl_msg.twist_stamped.header.stamp = rospy.Time.now()
+            dvl_msg.twist_stamped.header.frame_id = self.sensor_frame_id
 
-            dvl_msg.twist.twist.linear.x = vel_x
-            dvl_msg.twist.twist.linear.y = vel_y
-            dvl_msg.twist.twist.linear.z = vel_z
+            dvl_msg.twist_stamped.twist.twist.linear.x = vel_x
+            dvl_msg.twist_stamped.twist.twist.linear.y = vel_y
+            dvl_msg.twist_stamped.twist.twist.linear.z = vel_z
 
-            dvl_msg.twist.covariance = [var_x,  0,    0,   0, 0, 0,
+            dvl_msg.twist_stamped.twist.covariance = [var_x,  0,    0,   0, 0, 0,
                                           0,  var_y,  0,   0, 0, 0,
                                           0,    0,  var_z, 0, 0, 0,
                                           0,    0,    0,   0, 0, 0,

@@ -1,0 +1,10 @@
+ip: 192.168.1.201
+
+topics:
+  publishers:
+    dvl: "/dvl/dvl_data"
+    altimeter: "/dvl/altimeter"
+    ahrs: "/dvl/ahrs"
+    imu: "/dvl/imu"
+  subscribers:
+    enable: "/dvl/enable"
